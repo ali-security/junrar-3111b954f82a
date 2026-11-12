@@ -110,4 +110,94 @@ public class LocalFolderExtractorTest {
             FileUtils.deleteDirectory(sandbox);
         }
     }
+
+    @Test
+    public void rarWithFileOutsideTarget_ShouldThrowException3() throws Exception {
+        File file = TestCommons.writeResourceToFolder(tempFolder, "sibling-prefix-traversal.rar");
+
+        File tempDir = new File("/tmp/extract");
+        LocalFolderExtractor localFolderExtractor = new LocalFolderExtractor(tempDir);
+
+        try (Archive archive = new Archive(file)) {
+            FileHeader fileHeader = archive.nextFileHeader();
+
+            String expectedInvalidPath = "/tmp/extract_evil/pwned.txt";
+            Throwable thrown = catchThrowable(() -> localFolderExtractor.extract(archive, fileHeader));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class);
+            assertThat(thrown.getMessage())
+                .containsIgnoringCase("Rar contains file with invalid path")
+                .containsIgnoringCase(expectedInvalidPath);
+        }
+    }
+
+    @Test
+    public void rarWithSiblingPrefixTraversal_ShouldNotWriteFileOutsideTarget() throws Exception {
+        File sandbox = TestCommons.createTempDir();
+        try {
+            File destination = new File(sandbox, "extract");
+            assertThat(destination.mkdirs()).isTrue();
+            File rar = TestCommons.writeResourceToFolder(sandbox, "sibling-prefix-traversal.rar");
+            // sibling-prefix-traversal.rar holds a single entry named "../extract_evil/pwned.txt"
+            File escaped = new File(sandbox, "extract_evil" + File.separator + "pwned.txt");
+
+            Throwable thrown = catchThrowable(() -> Junrar.extract(rar, destination));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class);
+            assertThat(thrown.getMessage())
+                .containsIgnoringCase("Rar contains file with invalid path")
+                .containsIgnoringCase(escaped.getCanonicalPath());
+            assertThat(escaped).doesNotExist();
+        } finally {
+            FileUtils.deleteDirectory(sandbox);
+        }
+    }
+
+    @Test
+    public void rarWithSiblingPrefixDirectory_ShouldThrowException() throws IOException {
+        File sandbox = TestCommons.createTempDir();
+        try {
+            File destination = new File(sandbox, "extract");
+            assertThat(destination.mkdirs()).isTrue();
+            LocalFolderExtractor localFolderExtractor = new LocalFolderExtractor(destination);
+
+            FileHeader fileHeader = mock(FileHeader.class);
+            when(fileHeader.isDirectory()).thenReturn(true);
+            when(fileHeader.isUnicode()).thenReturn(true);
+            when(fileHeader.getFileName()).thenReturn("../extract_evil/");
+
+            File expectedInvalidPath = new File(sandbox, "extract_evil");
+            Throwable thrown = catchThrowable(() -> localFolderExtractor.createDirectory(fileHeader));
+
+            assertThat(thrown).isInstanceOf(IllegalStateException.class);
+            assertThat(thrown.getMessage())
+                .containsIgnoringCase("Rar contains invalid path")
+                .containsIgnoringCase(expectedInvalidPath.getCanonicalPath());
+        } finally {
+            FileUtils.deleteDirectory(sandbox);
+        }
+    }
+
+    @Test
+    public void rarWithEntriesInsideTarget_ShouldBeAccepted() throws Exception {
+        File destination = TestCommons.createTempDir();
+        try {
+            LocalFolderExtractor localFolderExtractor = new LocalFolderExtractor(destination);
+
+            FileHeader dirHeader = mock(FileHeader.class);
+            when(dirHeader.isDirectory()).thenReturn(true);
+            when(dirHeader.getFileName()).thenReturn("sub/dir");
+
+            File dir = localFolderExtractor.createDirectory(dirHeader);
+            assertThat(dir.getCanonicalPath())
+                .isEqualTo(new File(destination, "sub" + File.separator + "dir").getCanonicalPath());
+
+            File rar = TestCommons.writeTestRarToFolder(destination);
+            File extractFolder = new File(destination, "out");
+            assertThat(extractFolder.mkdirs()).isTrue();
+            assertThat(Junrar.extract(rar, extractFolder)).isNotEmpty();
+        } finally {
+            FileUtils.deleteDirectory(destination);
+        }
+    }
 }
